@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -206,3 +207,4 @@ if __name__ == "__main__":
 
     print("✅ Telegram bot started")
     app_bot.run_polling()
+
