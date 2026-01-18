@@ -1,4 +1,12 @@
 import os
+import threading
+from datetime import datetime
+
+import requests
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -8,18 +16,10 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from datetime import datetime
-import threading
-import requests
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 # ===== CONFIG =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
-
 
 # ===== STORAGE =====
 last_data = None
@@ -32,24 +32,16 @@ app = Flask(__name__)
 @app.route("/update")
 def update():
     global last_data
-
     t = float(request.args.get("t"))
     h = float(request.args.get("h"))
     p = float(request.args.get("p"))
 
-    data = {
-        "time": datetime.now(),
-        "t": t,
-        "h": h,
-        "p": p
-    }
-
+    data = {"time": datetime.now(), "t": t, "h": h, "p": p}
     last_data = data
     history.append(data)
-
     return "OK"
 
-# ===== TELEGRAM =====
+# ===== TELEGRAM HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_chat.id)
     keyboard = [
@@ -66,19 +58,15 @@ async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not last_data:
         await update.message.reply_text("Даних ще немає")
         return
-
     d = last_data
     await update.message.reply_text(
-        f"🌡 {d['t']} °C\n"
-        f"💧 {d['h']} %\n"
-        f"📈 {d['p']} hPa"
+        f"🌡 {d['t']} °C\n💧 {d['h']} %\n📈 {d['p']} hPa"
     )
 
 async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not history:
         await update.message.reply_text("Історія порожня")
         return
-
     times = [d["time"] for d in history]
     temps = [d["t"] for d in history]
 
@@ -123,7 +111,6 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💨 Вітер: {wind} м/с\n"
         f"☁ {desc}"
     )
-
     await update.message.reply_text(text)
 
 # ---------- WEATHER 3 DAYS ----------
@@ -136,44 +123,29 @@ async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     days = {}
-
     for item in r["list"]:
         date, time = item["dt_txt"].split(" ")
         temp = item["main"]["temp"]
         desc = item["weather"][0]["description"]
-
         rain = 0
-        if "rain" in item:
-            rain = item["rain"].get("3h", 0)
-        if "snow" in item:
-            rain += item["snow"].get("3h", 0)
+        if "rain" in item: rain = item["rain"].get("3h", 0)
+        if "snow" in item: rain += item["snow"].get("3h", 0)
 
         if date not in days:
-            days[date] = {
-                "temps": [],
-                "rain": 0,
-                "noon": None,
-                "desc": desc
-            }
+            days[date] = {"temps": [], "rain": 0, "noon": None, "desc": desc}
 
         days[date]["temps"].append(temp)
         days[date]["rain"] += rain
-
         if time.startswith("12"):
             days[date]["noon"] = temp
 
     text = "🌤 Прогноз на 3 дні (Запоріжжя)\n\n"
-
     for i, (date, info) in enumerate(days.items()):
-        if i == 3:
-            break
-
+        if i == 3: break
         temps = info["temps"]
         avg = sum(temps) / len(temps)
-        tmin = min(temps)
-        tmax = max(temps)
+        tmin, tmax = min(temps), max(temps)
         noon = info["noon"] if info["noon"] else avg
-
         text += (
             f"📅 {date}\n"
             f"🌡 Мін: {tmin:.1f}°C\n"
@@ -182,11 +154,9 @@ async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🌧 Опади: {info['rain']:.1f} мм\n"
             f"☁ {info['desc']}\n\n"
         )
-
     await update.message.reply_text(text)
 
 # ===== RUN FLASK =====
-import os
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
@@ -207,6 +177,3 @@ if __name__ == "__main__":
 
     print("✅ Telegram bot started")
     app_bot.run_polling(close_loop=False)
-
-
-
