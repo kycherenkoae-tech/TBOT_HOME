@@ -1,13 +1,6 @@
 import os
 from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
 from datetime import datetime
 import threading
 import requests
@@ -206,5 +199,6 @@ if __name__ == "__main__":
     app_bot.add_handler(MessageHandler(filters.Regex("Назад"), start))
 
     print("✅ Telegram bot started")
-    app_bot.run_polling()
+    app_bot.run_polling(close_loop=False)
+
 
