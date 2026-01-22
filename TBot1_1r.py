@@ -18,13 +18,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import pytz  # для київського часу
 
 # ===== CONFIG =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
 
 OFFLINE_SECONDS = 620  # 10 хв
-
+KYIV_TZ = pytz.timezone("Europe/Kyiv")
 
 # ===== STORAGE =====
 last_data = None
@@ -33,15 +34,12 @@ history = []
 users = set()
 is_offline = True
 
-
 # ===== FLASK =====
 app = Flask(__name__)
-
 
 @app.route("/")
 def home():
     return "Bot is running ✅"
-
 
 @app.route("/update")
 def update():
@@ -54,7 +52,7 @@ def update():
     except:
         return "BAD DATA", 400
 
-    now = datetime.now()
+    now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
 
     if is_offline and users:
         is_offline = False
@@ -75,7 +73,6 @@ def update():
 
     return "OK"
 
-
 # ===== HELPERS =====
 async def notify_all(text):
     for uid in users:
@@ -84,19 +81,17 @@ async def notify_all(text):
         except:
             pass
 
-
 def check_offline():
     global is_offline
     if not last_seen:
         return
 
-    delta = datetime.now() - last_seen
+    delta = datetime.now(pytz.utc).astimezone(KYIV_TZ) - last_seen
     if delta.total_seconds() > OFFLINE_SECONDS and not is_offline:
         is_offline = True
         application.create_task(
             notify_all("🔴 ESP зник (offline)")
         )
-
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,7 +108,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-
 async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     check_offline()
 
@@ -122,12 +116,11 @@ async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     d = last_data
+    d_time = d["time"].strftime("%H:%M:%S %d-%m-%Y")
     await update.message.reply_text(
-        f"🌡 {d['t']} °C\n"
-        f"💧 {d['h']} %\n"
-        f"📈 {d['p']} hPa"
+        f"🕒 Час: {d_time}\n"
+        f"🌡 {d['t']}°C\n💧 {d['h']}%\n📈 {d['p']} hPa"
     )
-
 
 async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     check_offline()
@@ -142,13 +135,12 @@ async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plt.figure()
     plt.plot(times, temps, marker="o")
     plt.xticks(rotation=45)
-    plt.title("Температура за день")
+    plt.title("Температура за день (Київський час)")
     plt.tight_layout()
     plt.savefig("temp_day.png")
     plt.close()
 
     await update.message.reply_photo(open("temp_day.png", "rb"))
-
 
 async def weather_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["Зараз", "3 дні"], ["Назад"]]
@@ -156,7 +148,6 @@ async def weather_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Оберіть прогноз:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
-
 
 async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.openweathermap.org/data/2.5/weather?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
@@ -182,7 +173,6 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(text)
-
 
 async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.openweathermap.org/data/2.5/forecast?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
@@ -230,12 +220,10 @@ async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text)
 
-
 # ===== RUN =====
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
