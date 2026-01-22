@@ -1,8 +1,6 @@
 import os
 import threading
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import math
 
 import requests
 from flask import Flask, request
@@ -24,9 +22,8 @@ import matplotlib.pyplot as plt
 # ===== CONFIG =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
-TZ = ZoneInfo("Europe/Kyiv")
 
-OFFLINE_SECONDS = 660  # 15 хв
+OFFLINE_SECONDS = 660  # 11 хв
 
 
 # ===== STORAGE =====
@@ -34,28 +31,36 @@ last_data = None
 last_seen = None
 history = []
 users = set()
+is_offline = True
 
 
 # ===== FLASK =====
 app = Flask(__name__)
 
 
+@app.route("/")
+def home():
+    return "Bot is running ✅"
+
+
 @app.route("/update")
 def update():
-    global last_data, last_seen
+    global last_data, last_seen, is_offline
 
     try:
-        t = float(request.args.get("t"))
-        h = float(request.args.get("h"))
-        p = float(request.args.get("p"))
+        t = round(float(request.args.get("t")), 1)
+        h = round(float(request.args.get("h")), 1)
+        p = round(float(request.args.get("p")), 1)
     except:
         return "BAD DATA", 400
 
-    now = datetime.now(TZ)
+    now = datetime.now()
 
-    # ---- gap detect ----
-    if last_seen and (now - last_seen).total_seconds() > OFFLINE_SECONDS:
-        history.append({"time": now, "t": math.nan, "h": math.nan, "p": math.nan})
+    if is_offline and users:
+        is_offline = False
+        application.create_task(
+            notify_all("🟢 ESP зʼявився онлайн")
+        )
 
     data = {
         "time": now,
@@ -69,6 +74,28 @@ def update():
     history.append(data)
 
     return "OK"
+
+
+# ===== HELPERS =====
+async def notify_all(text):
+    for uid in users:
+        try:
+            await application.bot.send_message(chat_id=uid, text=text)
+        except:
+            pass
+
+
+def check_offline():
+    global is_offline
+    if not last_seen:
+        return
+
+    delta = datetime.now() - last_seen
+    if delta.total_seconds() > OFFLINE_SECONDS and not is_offline:
+        is_offline = True
+        application.create_task(
+            notify_all("🔴 ESP зник (offline)")
+        )
 
 
 # ===== TELEGRAM =====
@@ -87,36 +114,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def get_status():
-    if not last_seen:
-        return "⚪ Немає даних"
-
-    delta = datetime.now(TZ) - last_seen
-
-    if delta.total_seconds() > OFFLINE_SECONDS:
-        return f"🔴 Offline ({int(delta.total_seconds()/60)} хв)"
-    else:
-        return f"🟢 Online ({int(delta.total_seconds())} сек)"
-
-
 async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    check_offline()
+
     if not last_data:
         await update.message.reply_text("Даних ще немає")
         return
 
     d = last_data
-    status = get_status()
-
     await update.message.reply_text(
-        f"{status}\n\n"
         f"🌡 {d['t']} °C\n"
         f"💧 {d['h']} %\n"
-        f"📈 {d['p']} hPa\n\n"
-        f"🕒 {d['time'].strftime('%H:%M:%S')}"
+        f"📈 {d['p']} hPa"
     )
 
 
 async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    check_offline()
+
     if not history:
         await update.message.reply_text("Історія порожня")
         return
@@ -124,11 +139,10 @@ async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     times = [d["time"] for d in history]
     temps = [d["t"] for d in history]
 
-    plt.figure(figsize=(10,4))
+    plt.figure()
     plt.plot(times, temps, marker="o")
     plt.xticks(rotation=45)
     plt.title("Температура за день")
-    plt.grid(True)
     plt.tight_layout()
     plt.savefig("temp_day.png")
     plt.close()
@@ -170,6 +184,54 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = f"https://api.openweathermap.org/data/2.5/forecast?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
+    r = requests.get(url).json()
+
+    if r.get("cod") != "200":
+        await update.message.reply_text("Помилка отримання прогнозу 😢")
+        return
+
+    days = {}
+
+    for item in r["list"]:
+        date, time = item["dt_txt"].split(" ")
+        temp = item["main"]["temp"]
+        desc = item["weather"][0]["description"]
+
+        rain = item.get("rain", {}).get("3h", 0)
+
+        if date not in days:
+            days[date] = {"temps": [], "rain": 0, "noon": None, "desc": desc}
+
+        days[date]["temps"].append(temp)
+        days[date]["rain"] += rain
+
+        if time.startswith("12"):
+            days[date]["noon"] = temp
+
+    text = "🌤 Прогноз на 3 дні\n\n"
+
+    for i, (date, info) in enumerate(days.items()):
+        if i == 3:
+            break
+
+        temps = info["temps"]
+        avg = sum(temps) / len(temps)
+
+        text += (
+            f"📅 {date}\n"
+            f"🌡 Мін: {min(temps):.1f}°C\n"
+            f"🌡 Макс: {max(temps):.1f}°C\n"
+            f"🌞 День: {(info['noon'] or avg):.1f}°C\n"
+            f"🌧 Опади: {info['rain']:.1f} мм\n"
+            f"☁ {info['desc']}\n\n"
+        )
+
+    await update.message.reply_text(text)
+
+
+# ===== RUN =====
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
@@ -185,6 +247,7 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.Regex("Історія"), history_day))
     application.add_handler(MessageHandler(filters.Regex("Погода в Запоріжжі"), weather_menu))
     application.add_handler(MessageHandler(filters.Regex("^Зараз$"), weather_now))
+    application.add_handler(MessageHandler(filters.Regex("^3 дні$"), weather_3days))
     application.add_handler(MessageHandler(filters.Regex("Назад"), start))
 
     print("✅ Bot started")
