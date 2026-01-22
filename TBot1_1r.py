@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
 
-OFFLINE_SECONDS = 620  # 10 хв
+OFFLINE_SECONDS = 300  # 5 хв
 
 KYIV_TZ = ZoneInfo("Europe/Kyiv")  # Київський час
 
@@ -256,3 +256,4 @@ if __name__ == "__main__":
 
     print("✅ Bot started")
     application.run_polling()
+
