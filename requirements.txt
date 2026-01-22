@@ -1,6 +1,9 @@
-python-telegram-bot==20.3
-Flask==2.3.2
-requests==2.31.0
-matplotlib==3.8.1
+pytz
+python-telegram-bot==20.4
+Flask
+matplotlib
+requests
+
+
 
 
