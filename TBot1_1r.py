@@ -1,6 +1,7 @@
 import os
+import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 from flask import Flask, request
@@ -22,16 +23,18 @@ import matplotlib.pyplot as plt
 # ===== CONFIG =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
+RENDER_URL = os.environ.get("RENDER_URL")  # https://tbot-home.onrender.com
 
-OFFLINE_SECONDS = 660  # 11 хв
+UA_TZ = timezone(timedelta(hours=2))
 
 
 # ===== STORAGE =====
 last_data = None
-last_seen = None
 history = []
 users = set()
-is_offline = True
+
+last_seen = None
+ESP_TIMEOUT = 600  # 10 хв
 
 
 # ===== FLASK =====
@@ -40,65 +43,40 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot is running ✅"
+    return "Bot is alive"
 
 
 @app.route("/update")
-def update():
-    global last_data, last_seen, is_offline
+def update_from_esp():
+    global last_data, last_seen
 
-    try:
-        t = round(float(request.args.get("t")), 1)
-        h = round(float(request.args.get("h")), 1)
-        p = round(float(request.args.get("p")), 1)
-    except:
-        return "BAD DATA", 400
+    t = round(float(request.args.get("t")), 1)
+    h = round(float(request.args.get("h")), 1)
+    p = round(float(request.args.get("p")), 1)
 
-    now = datetime.now()
+    now = datetime.now(UA_TZ)
 
-    if is_offline and users:
-        is_offline = False
-        application.create_task(
-            notify_all("🟢 ESP зʼявився онлайн")
-        )
+    data = {"time": now, "t": t, "h": h, "p": p}
 
-    data = {
-        "time": now,
-        "t": t,
-        "h": h,
-        "p": p
-    }
+    if last_seen is None:
+        notify_all("🟢 ESP зʼявився онлайн")
 
-    last_seen = now
+    last_seen = time.time()
     last_data = data
     history.append(data)
 
     return "OK"
 
 
-# ===== HELPERS =====
+# ===== TELEGRAM =====
 async def notify_all(text):
-    for uid in users:
+    for u in users:
         try:
-            await application.bot.send_message(chat_id=uid, text=text)
+            await application.bot.send_message(u, text)
         except:
             pass
 
 
-def check_offline():
-    global is_offline
-    if not last_seen:
-        return
-
-    delta = datetime.now() - last_seen
-    if delta.total_seconds() > OFFLINE_SECONDS and not is_offline:
-        is_offline = True
-        application.create_task(
-            notify_all("🔴 ESP зник (offline)")
-        )
-
-
-# ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_chat.id)
 
@@ -115,8 +93,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_offline()
-
     if not last_data:
         await update.message.reply_text("Даних ще немає")
         return
@@ -125,13 +101,12 @@ async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🌡 {d['t']} °C\n"
         f"💧 {d['h']} %\n"
-        f"📈 {d['p']} hPa"
+        f"📈 {d['p']} hPa\n"
+        f"🕒 {d['time'].strftime('%H:%M:%S')}"
     )
 
 
 async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_offline()
-
     if not history:
         await update.message.reply_text("Історія порожня")
         return
@@ -163,22 +138,15 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = requests.get(url).json()
 
     if r.get("cod") != 200:
-        await update.message.reply_text("Помилка отримання погоди 😢")
+        await update.message.reply_text("Помилка погоди")
         return
 
-    temp = r["main"]["temp"]
-    feels = r["main"]["feels_like"]
-    hum = r["main"]["humidity"]
-    wind = r["wind"]["speed"]
-    desc = r["weather"][0]["description"]
-
     text = (
-        f"🌤 Погода зараз (Запоріжжя)\n\n"
-        f"🌡 {temp}°C\n"
-        f"🤍 Відчувається: {feels}°C\n"
-        f"💧 Вологість: {hum}%\n"
-        f"💨 Вітер: {wind} м/с\n"
-        f"☁ {desc}"
+        f"🌤 Погода Запоріжжя\n\n"
+        f"🌡 {r['main']['temp']}°C\n"
+        f"💧 {r['main']['humidity']}%\n"
+        f"💨 {r['wind']['speed']} м/с\n"
+        f"{r['weather'][0]['description']}"
     )
 
     await update.message.reply_text(text)
@@ -189,56 +157,55 @@ async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = requests.get(url).json()
 
     if r.get("cod") != "200":
-        await update.message.reply_text("Помилка отримання прогнозу 😢")
+        await update.message.reply_text("Помилка прогнозу")
         return
 
     days = {}
 
     for item in r["list"]:
-        date, time = item["dt_txt"].split(" ")
+        date, time_s = item["dt_txt"].split(" ")
         temp = item["main"]["temp"]
-        desc = item["weather"][0]["description"]
-
-        rain = item.get("rain", {}).get("3h", 0)
 
         if date not in days:
-            days[date] = {"temps": [], "rain": 0, "noon": None, "desc": desc}
+            days[date] = []
 
-        days[date]["temps"].append(temp)
-        days[date]["rain"] += rain
+        days[date].append(temp)
 
-        if time.startswith("12"):
-            days[date]["noon"] = temp
+    text = "🌤 Прогноз 3 дні\n\n"
 
-    text = "🌤 Прогноз на 3 дні\n\n"
-
-    for i, (date, info) in enumerate(days.items()):
+    for i, (d, temps) in enumerate(days.items()):
         if i == 3:
             break
 
-        temps = info["temps"]
-        avg = sum(temps) / len(temps)
-
-        text += (
-            f"📅 {date}\n"
-            f"🌡 Мін: {min(temps):.1f}°C\n"
-            f"🌡 Макс: {max(temps):.1f}°C\n"
-            f"🌞 День: {(info['noon'] or avg):.1f}°C\n"
-            f"🌧 Опади: {info['rain']:.1f} мм\n"
-            f"☁ {info['desc']}\n\n"
-        )
+        text += f"{d}\n🌡 {min(temps):.1f} — {max(temps):.1f}\n\n"
 
     await update.message.reply_text(text)
 
 
-# ===== RUN =====
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# ===== WATCHDOG =====
+def watchdog():
+    global last_seen
+    while True:
+        if last_seen and time.time() - last_seen > ESP_TIMEOUT:
+            last_seen = None
+            try:
+                application.create_task(notify_all("🔴 ESP зник офлайн"))
+            except:
+                pass
+        time.sleep(30)
 
 
+# ===== WEBHOOK =====
+@app.post(f"/{BOT_TOKEN}")
+def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.create_task(application.process_update(update))
+    return "OK"
+
+
+# ===== MAIN =====
 if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
+    port = int(os.environ.get("PORT", 10000))
 
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -250,5 +217,9 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.Regex("^3 дні$"), weather_3days))
     application.add_handler(MessageHandler(filters.Regex("Назад"), start))
 
-    print("✅ Bot started")
-    application.run_polling()
+    application.bot.set_webhook(f"{RENDER_URL}/{BOT_TOKEN}")
+
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    print("✅ Webhook bot started")
+    app.run(host="0.0.0.0", port=port)
