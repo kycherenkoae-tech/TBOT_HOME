@@ -1,4 +1,5 @@
-python-telegram-bot==21.6
-flask
-requests
-matplotlib
+python-telegram-bot==20.3
+Flask==2.3.2
+requests==2.31.0
+matplotlib==3.8.1
+pytz==2026.1
