@@ -59,13 +59,14 @@ def update_from_esp():
     data = {"time": now, "t": t, "h": h, "p": p}
 
     if last_seen is None:
-        notify_all("🟢 ESP зʼявився онлайн")
+        application.create_task(notify_all("🟢 ESP зʼявився онлайн"))
 
     last_seen = time.time()
     last_data = data
     history.append(data)
 
     return "OK"
+
 
 
 # ===== TELEGRAM =====
@@ -223,3 +224,4 @@ if __name__ == "__main__":
 
     print("✅ Webhook bot started")
     app.run(host="0.0.0.0", port=port)
+
