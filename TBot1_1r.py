@@ -244,6 +244,8 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.Regex("^3 дні$"), weather_3days))
     application.add_handler(MessageHandler(filters.Regex("Назад"), start))
 
-    print("✅ Bot started (polling)")
+   print("✅ Bot started (polling)")
 
-    application.run_polling()
+application.run_polling(drop_pending_updates=True)
+
+
