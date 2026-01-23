@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -9,22 +8,18 @@ from flask import Flask, request
 import matplotlib.pyplot as plt
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
 
 # ---------------- CONFIG ----------------
-
 TOKEN = os.environ.get("BOT_TOKEN", "PUT_YOUR_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://tbot-home.onrender.com")
-CHAT_ID_DEFAULT = None
-
-TZ = ZoneInfo("Europe/Kyiv")
 HISTORY_FILE = "history.json"
+TZ = ZoneInfo("Europe/Kyiv")
 
 ESP_STATUS = False
 LAST_CHAT_ID = None
 
 # ---------------- UTILS ----------------
-
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return []
@@ -38,15 +33,10 @@ def save_history(data):
 def cleanup_history():
     data = load_history()
     now = datetime.now(TZ)
-    cleaned = []
-    for d in data:
-        t = datetime.fromisoformat(d["time"])
-        if now - t < timedelta(hours=24):
-            cleaned.append(d)
+    cleaned = [d for d in data if now - datetime.fromisoformat(d["time"]) < timedelta(hours=24)]
     save_history(cleaned)
 
-# ---------------- TELEGRAM ----------------
-
+# ---------------- TELEGRAM HANDLERS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global LAST_CHAT_ID
     LAST_CHAT_ID = update.effective_chat.id
@@ -72,7 +62,6 @@ async def graph(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_esp(context: ContextTypes.DEFAULT_TYPE):
     global ESP_STATUS, LAST_CHAT_ID
-
     cleanup_history()
     data = load_history()
     if not data:
@@ -94,8 +83,11 @@ async def check_esp(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(LAST_CHAT_ID, "🔴 ESP32 OFFLINE")
 
 # ---------------- FLASK ----------------
-
 app = Flask(__name__)
+application = ApplicationBuilder().token(TOKEN).build()
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("graph", graph))
 
 @app.route("/")
 def home():
@@ -121,29 +113,34 @@ def update_esp():
     ESP_STATUS = True
     return "OK"
 
+@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+async def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, await application.bot)
+    await application.process_update(update)
+    return "OK"
+
 # ---------------- MAIN ----------------
-
 async def main():
-    application = Application.builder().token(TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("graph", graph))
-
+    # Initialize application and set webhook
+    await application.initialize()
     await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook/{TOKEN}")
 
-    application.job_queue.run_repeating(check_esp, interval=300, first=30)
+    # Start job queue
+    if application.job_queue:
+        application.job_queue.run_repeating(check_esp, interval=300, first=30)
 
-    await application.initialize()
     await application.start()
+    print("Bot started on Render")
 
-    return application
-
-def run():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
-
-threading.Thread(target=run).start()
+    # Keep alive
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
+    # Для запуску Flask + asyncio разом
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    asyncio.get_event_loop().create_task(main())
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
