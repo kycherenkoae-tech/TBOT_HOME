@@ -8,7 +8,9 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 
 import requests
@@ -216,3 +218,4 @@ asyncio.get_event_loop().run_until_complete(setup_bot())
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
