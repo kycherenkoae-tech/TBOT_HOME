@@ -1,7 +1,8 @@
 import os
 import threading
+import asyncio
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo  # для київського часу
+from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, request
@@ -23,8 +24,8 @@ import matplotlib.pyplot as plt
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
 
-OFFLINE_SECONDS = 300  # 5 хв
-KYIV_TZ = ZoneInfo("Europe/Kyiv")  # Київський час
+OFFLINE_SECONDS = 300
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 # ===== STORAGE =====
 last_data = None
@@ -32,6 +33,8 @@ last_seen = None
 history = []
 users = set()
 is_offline = True
+
+application = None
 
 # ===== FLASK =====
 app = Flask(__name__)
@@ -53,11 +56,11 @@ def update():
 
     now = datetime.now(timezone.utc).astimezone(KYIV_TZ)
 
-    # Якщо ESP зʼявилася онлайн
-    if is_offline and users:
+    if is_offline and users and application:
         is_offline = False
-        application.create_task(
-            notify_all("🟢 ESP зʼявився онлайн")
+        asyncio.run_coroutine_threadsafe(
+            notify_all("🟢 ESP зʼявився онлайн"),
+            application.bot.loop
         )
 
     data = {
@@ -75,32 +78,33 @@ def update():
 
 # ===== HELPERS =====
 async def notify_all(text):
-    for uid in users:
+    for uid in list(users):
         try:
             await application.bot.send_message(chat_id=uid, text=text)
         except:
             pass
 
 def check_offline():
-    """Перевіряє, чи ESP офлайн і відправляє повідомлення"""
     global is_offline
+
     if not last_seen:
         return
 
     delta = datetime.now(timezone.utc).astimezone(KYIV_TZ) - last_seen
-    if delta.total_seconds() > OFFLINE_SECONDS and not is_offline:
+
+    if delta.total_seconds() > OFFLINE_SECONDS and not is_offline and application:
         is_offline = True
-        application.create_task(
-            notify_all("🔴 ESP зник (offline)")
+        asyncio.run_coroutine_threadsafe(
+            notify_all("🔴 ESP зник (offline)"),
+            application.bot.loop
         )
 
 def esp_watcher():
-    """Безперервно перевіряє ESP кожні 30 секунд"""
     while True:
         check_offline()
-        threading.Event().wait(240)
+        threading.Event().wait(30)
 
-# ===== TELEGRAM HANDLERS =====
+# ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_chat.id)
 
@@ -159,7 +163,7 @@ async def weather_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.openweathermap.org/data/2.5/weather?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
-    r = requests.get(url).json()
+    r = requests.get(url, timeout=10).json()
 
     if r.get("cod") != 200:
         await update.message.reply_text("Помилка отримання погоди 😢")
@@ -171,7 +175,7 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wind = r["wind"]["speed"]
     desc = r["weather"][0]["description"]
 
-    text = (
+    await update.message.reply_text(
         f"🌤 Погода зараз (Запоріжжя)\n\n"
         f"🌡 {temp:.1f}°C\n"
         f"🤍 Відчувається: {feels:.1f}°C\n"
@@ -180,11 +184,9 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"☁ {desc}"
     )
 
-    await update.message.reply_text(text)
-
 async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.openweathermap.org/data/2.5/forecast?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
-    r = requests.get(url).json()
+    r = requests.get(url, timeout=10).json()
 
     if r.get("cod") != "200":
         await update.message.reply_text("Помилка отримання прогнозу 😢")
@@ -229,16 +231,11 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    # Flask для /update
     threading.Thread(target=run_flask, daemon=True).start()
-
-    # ESP watcher (постійна перевірка онлайн/офлайн)
     threading.Thread(target=esp_watcher, daemon=True).start()
 
-    # Telegram бот
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Хендлери
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex("Температура"), temperature))
     application.add_handler(MessageHandler(filters.Regex("Історія"), history_day))
@@ -248,4 +245,5 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.Regex("Назад"), start))
 
     print("✅ Bot started (polling)")
+
     application.run_polling()
