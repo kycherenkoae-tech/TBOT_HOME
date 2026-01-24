@@ -1,6 +1,7 @@
 import os
 import threading
 import asyncio
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -20,12 +21,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+
 # ===== CONFIG =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
 
 OFFLINE_SECONDS = 300
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
+
 
 # ===== STORAGE =====
 last_data = None
@@ -36,12 +39,15 @@ is_offline = True
 
 application = None
 
+
 # ===== FLASK =====
 app = Flask(__name__)
+
 
 @app.route("/")
 def home():
     return "Bot is running ✅"
+
 
 @app.route("/update")
 def update():
@@ -58,23 +64,16 @@ def update():
 
     if is_offline and users and application:
         is_offline = False
-        asyncio.run_coroutine_threadsafe(
-            notify_all("🟢 ESP зʼявився онлайн"),
-            application.bot.loop
-        )
+        application.create_task(notify_all("🟢 ESP зʼявився онлайн"))
 
-    data = {
-        "time": now,
-        "t": t,
-        "h": h,
-        "p": p
-    }
+    data = {"time": now, "t": t, "h": h, "p": p}
 
     last_seen = now
     last_data = data
     history.append(data)
 
     return "OK"
+
 
 # ===== HELPERS =====
 async def notify_all(text):
@@ -83,6 +82,7 @@ async def notify_all(text):
             await application.bot.send_message(chat_id=uid, text=text)
         except:
             pass
+
 
 def check_offline():
     global is_offline
@@ -94,15 +94,27 @@ def check_offline():
 
     if delta.total_seconds() > OFFLINE_SECONDS and not is_offline and application:
         is_offline = True
-        asyncio.run_coroutine_threadsafe(
-            notify_all("🔴 ESP зник (offline)"),
-            application.bot.loop
-        )
+        application.create_task(notify_all("🔴 ESP зник (offline)"))
+
 
 def esp_watcher():
     while True:
         check_offline()
-        threading.Event().wait(30)
+        time.sleep(30)
+
+
+def keep_alive():
+    url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not url:
+        return
+
+    while True:
+        try:
+            requests.get(url, timeout=10)
+        except:
+            pass
+        time.sleep(300)
+
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,6 +131,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
+
 async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     check_offline()
 
@@ -134,9 +147,8 @@ async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🕒 {d['time'].strftime('%H:%M:%S')}"
     )
 
-async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_offline()
 
+async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not history:
         await update.message.reply_text("Історія порожня")
         return
@@ -154,12 +166,14 @@ async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_photo(open("temp_day.png", "rb"))
 
+
 async def weather_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["Зараз", "3 дні"], ["Назад"]]
     await update.message.reply_text(
         "Оберіть прогноз:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
+
 
 async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.openweathermap.org/data/2.5/weather?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
@@ -183,6 +197,7 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💨 Вітер: {wind} м/с\n"
         f"☁ {desc}"
     )
+
 
 async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.openweathermap.org/data/2.5/forecast?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
@@ -212,8 +227,10 @@ async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, (date, info) in enumerate(days.items()):
         if i == 3:
             break
+
         temps = info["temps"]
         avg = sum(temps) / len(temps)
+
         text += (
             f"📅 {date}\n"
             f"🌡 Мін: {min(temps):.1f}°C\n"
@@ -225,14 +242,17 @@ async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text)
 
+
 # ===== RUN =====
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
+
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=esp_watcher, daemon=True).start()
+    threading.Thread(target=keep_alive, daemon=True).start()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -244,8 +264,6 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler(filters.Regex("^3 дні$"), weather_3days))
     application.add_handler(MessageHandler(filters.Regex("Назад"), start))
 
-   print("✅ Bot started (polling)")
+    print("✅ Bot started (polling)")
 
-application.run_polling(drop_pending_updates=True)
-
-
+    application.run_polling(drop_pending_updates=True)
