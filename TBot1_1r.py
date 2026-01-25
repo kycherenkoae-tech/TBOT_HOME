@@ -195,6 +195,7 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤍 Відчувається: {feels:.1f}°C\n"
         f"💧 Вологість: {hum}%\n"
         f"💨 Вітер: {wind} м/с\n"
+        f"🌧 Опади: {info['rain']:.1f} мм\n"
         f"☁ {desc}"
     )
 
@@ -267,4 +268,5 @@ if __name__ == "__main__":
     print("✅ Bot started (polling)")
 
     application.run_polling(drop_pending_updates=True)
+
 
