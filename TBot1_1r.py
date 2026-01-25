@@ -178,13 +178,15 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wind = r["wind"]["speed"]
     desc = r["weather"][0]["description"]
 
+    rain = r.get("rain", {}).get("1h", 0)
+
     await update.message.reply_text(
         f"🌤 Погода зараз (Запоріжжя)\n\n"
         f"🌡 {temp:.1f}°C\n"
         f"🤍 Відчувається: {feels:.1f}°C\n"
         f"💧 Вологість: {hum}%\n"
         f"💨 Вітер: {wind} м/с\n"
-         f"🌧 Опади: {info['rain']:.1f} мм\n"
+        f"🌧 Опади: {rain:.1f} мм\n"
         f"☁ {desc}"
     )
 
@@ -257,4 +259,5 @@ if __name__ == "__main__":
     print("✅ Bot started (polling)")
 
     application.run_polling(drop_pending_updates=True)
+
 
