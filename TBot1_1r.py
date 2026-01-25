@@ -267,3 +267,4 @@ if __name__ == "__main__":
     print("✅ Bot started (polling)")
 
     application.run_polling(drop_pending_updates=True)
+
