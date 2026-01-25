@@ -1,8 +1,7 @@
 import os
 import threading
-import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -26,7 +25,6 @@ import matplotlib.pyplot as plt
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
 
-OFFLINE_SECONDS = 300
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 
@@ -35,7 +33,6 @@ last_data = None
 last_seen = None
 history = []
 users = set()
-is_offline = True
 
 application = None
 
@@ -51,7 +48,7 @@ def home():
 
 @app.route("/update")
 def update():
-    global last_data, last_seen, is_offline
+    global last_data, last_seen, history
 
     try:
         t = round(float(request.args.get("t")), 1)
@@ -62,45 +59,37 @@ def update():
 
     now = datetime.now(timezone.utc).astimezone(KYIV_TZ)
 
-    if is_offline and users and application:
-        is_offline = False
-        application.create_task(notify_all("🟢 ESP зʼявився онлайн"))
-
     data = {"time": now, "t": t, "h": h, "p": p}
 
     last_seen = now
     last_data = data
     history.append(data)
 
+    cleanup_history()
+
     return "OK"
 
 
 # ===== HELPERS =====
-async def notify_all(text):
-    for uid in list(users):
-        try:
-            await application.bot.send_message(chat_id=uid, text=text)
-        except:
-            pass
+def cleanup_history():
+    global history
+
+    now = datetime.now(timezone.utc).astimezone(KYIV_TZ)
+    history = [d for d in history if now - d["time"] < timedelta(hours=24)]
 
 
-def check_offline():
-    global is_offline
+def midnight_cleaner():
+    global history
 
-    if not last_seen:
-        return
-
-    delta = datetime.now(timezone.utc).astimezone(KYIV_TZ) - last_seen
-
-    if delta.total_seconds() > OFFLINE_SECONDS and not is_offline and application:
-        is_offline = True
-        application.create_task(notify_all("🔴 ESP зник (offline)"))
-
-
-def esp_watcher():
     while True:
-        check_offline()
-        time.sleep(30)
+        now = datetime.now(timezone.utc).astimezone(KYIV_TZ)
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sleep_time = (next_midnight - now).total_seconds()
+
+        time.sleep(sleep_time)
+
+        history.clear()
+        print("🧹 History cleared at midnight")
 
 
 def keep_alive():
@@ -133,8 +122,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_offline()
-
     if not last_data:
         await update.message.reply_text("Даних ще немає")
         return
@@ -149,6 +136,8 @@ async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def history_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cleanup_history()
+
     if not history:
         await update.message.reply_text("Історія порожня")
         return
@@ -251,8 +240,8 @@ def run_flask():
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    threading.Thread(target=esp_watcher, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
+    threading.Thread(target=midnight_cleaner, daemon=True).start()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
