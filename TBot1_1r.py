@@ -163,7 +163,11 @@ def update_esp():
 
 # ---------------- MAIN ----------------
 
-async def run_bot():
+def start_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+
+async def main():
     global application
 
     application = Application.builder().token(TOKEN).build()
@@ -176,23 +180,20 @@ async def run_bot():
 
     await application.initialize()
     await application.start()
-    await application.bot.initialize()
 
-    # тримаємо цикл живим
+    print("✅ Telegram bot started")
+
+    # тримаємо бот живим
     while True:
         await asyncio.sleep(3600)
 
 
-def run():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_bot())
-
-
-threading.Thread(target=run, daemon=True).start()
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    # Flask у thread
+    threading.Thread(target=start_flask, daemon=True).start()
+
+    # Telegram у main loop
+    asyncio.run(main())
+
 
 
