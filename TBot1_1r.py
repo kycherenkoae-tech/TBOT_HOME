@@ -167,7 +167,7 @@ def start_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 
-async def main():
+def run_bot():
     global application
 
     application = Application.builder().token(TOKEN).build()
@@ -176,24 +176,18 @@ async def main():
     application.add_handler(CommandHandler("graph", graph))
     application.add_handler(CommandHandler("weather", weather))
 
-    asyncio.create_task(background_loop(application))
+    application.job_queue.run_repeating(check_esp, interval=60, first=30)
 
-    await application.initialize()
-    await application.start()
+    print("✅ Telegram polling starting...")
 
-    print("✅ Telegram bot started")
-
-    # тримаємо бот живим
-    while True:
-        await asyncio.sleep(3600)
+    application.run_polling(stop_signals=None)
 
 
 if __name__ == "__main__":
     # Flask у thread
     threading.Thread(target=start_flask, daemon=True).start()
 
-    # Telegram у main loop
-    asyncio.run(main())
-
+    # Telegram у main thread
+    run_bot()
 
 
