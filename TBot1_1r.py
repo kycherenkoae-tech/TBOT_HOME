@@ -163,29 +163,26 @@ def update_esp():
 
 # ---------------- MAIN ----------------
 
-async def main():
+# ---------------- MAIN ----------------
+
+async def run_bot():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("graph", graph))
     application.add_handler(CommandHandler("weather", weather))
 
-    await application.initialize()
-    await application.start()
-
     asyncio.create_task(background_loop(application))
 
-    await application.bot.initialize()
-
-    await application.stop()
+    await application.run_polling()
 
 def run():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
-    loop.run_forever()
+    loop.run_until_complete(run_bot())
 
-threading.Thread(target=run).start()
+threading.Thread(target=run, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
