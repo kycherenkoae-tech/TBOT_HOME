@@ -163,9 +163,9 @@ def update_esp():
 
 # ---------------- MAIN ----------------
 
-# ---------------- MAIN ----------------
-
 async def run_bot():
+    global application
+
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -174,15 +174,25 @@ async def run_bot():
 
     asyncio.create_task(background_loop(application))
 
-    await application.run_polling()
+    await application.initialize()
+    await application.start()
+    await application.bot.initialize()
+
+    # тримаємо цикл живим
+    while True:
+        await asyncio.sleep(3600)
+
 
 def run():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(run_bot())
 
+
 threading.Thread(target=run, daemon=True).start()
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
