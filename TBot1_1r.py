@@ -166,28 +166,19 @@ def update_esp():
 def start_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
+async def post_init(app: Application):
+    asyncio.create_task(background_loop(app))
 
 def run_bot():
-    global application
-
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("graph", graph))
     application.add_handler(CommandHandler("weather", weather))
 
-    application.job_queue.run_repeating(check_esp, interval=60, first=30)
-
     print("✅ Telegram polling starting...")
-
     application.run_polling(stop_signals=None)
 
-
 if __name__ == "__main__":
-    # Flask у thread
     threading.Thread(target=start_flask, daemon=True).start()
-
-    # Telegram у main thread
     run_bot()
-
-
