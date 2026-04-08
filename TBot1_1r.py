@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -33,21 +34,20 @@ last_seen = None
 history = []
 users = set()
 
+application = None
 
-# ===== APP =====
+
+# ===== FLASK =====
 app = Flask(__name__)
-application = Application.builder().token(BOT_TOKEN).build()
 
 
-# ===== ROUTES =====
 @app.route("/")
 def home():
-    return "OK"
+    return "Bot is running ✅"
 
 
-# 👉 ДАНІ З ПЛАТИ (ESP)
 @app.route("/update")
-def update_data():
+def update():
     global last_data, last_seen, history
 
     try:
@@ -67,35 +67,42 @@ def update_data():
 
     cleanup_history()
 
-    print("📡 DATA:", data)
-
-    return "OK"
-
-
-# 👉 TELEGRAM WEBHOOK
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-async def telegram_webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
     return "OK"
 
 
 # ===== HELPERS =====
 def cleanup_history():
     global history
+
     now = datetime.now(timezone.utc).astimezone(KYIV_TZ)
     history = [d for d in history if now - d["time"] < timedelta(hours=24)]
 
 
 def midnight_cleaner():
     global history
+
     while True:
         now = datetime.now(timezone.utc).astimezone(KYIV_TZ)
         next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        time.sleep((next_midnight - now).total_seconds())
+        sleep_time = (next_midnight - now).total_seconds()
+
+        time.sleep(sleep_time)
+
         history.clear()
-        print("🧹 History cleared")
+        print("🧹 History cleared at midnight")
+
+
+def keep_alive():
+    url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not url:
+        return
+
+    while True:
+        try:
+            requests.get(url, timeout=10)
+        except:
+            pass
+        time.sleep(300)
 
 
 # ===== TELEGRAM =====
@@ -162,42 +169,94 @@ async def weather_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = requests.get(url, timeout=10).json()
 
     if r.get("cod") != 200:
-        await update.message.reply_text("Помилка погоди 😢")
+        await update.message.reply_text("Помилка отримання погоди 😢")
         return
 
+    temp = r["main"]["temp"]
+    feels = r["main"]["feels_like"]
+    hum = r["main"]["humidity"]
+    wind = r["wind"]["speed"]
+    desc = r["weather"][0]["description"]
+
+    rain = r.get("rain", {}).get("1h", 0)
+
     await update.message.reply_text(
-        f"🌡 {r['main']['temp']:.1f}°C\n"
-        f"💧 {r['main']['humidity']}%\n"
-        f"💨 {r['wind']['speed']} м/с\n"
-        f"☁ {r['weather'][0]['description']}"
+        f"🌤 Погода зараз (Запоріжжя)\n\n"
+        f"🌡 {temp:.1f}°C\n"
+        f"🤍 Відчувається: {feels:.1f}°C\n"
+        f"💧 Вологість: {hum}%\n"
+        f"💨 Вітер: {wind} м/с\n"
+        f"🌧 Опади: {rain:.1f} мм\n"
+        f"☁ {desc}"
     )
 
 
 async def weather_3days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Функція в розробці 😉")
+    url = f"https://api.openweathermap.org/data/2.5/forecast?q=Zaporizhzhia,UA&appid={WEATHER_KEY}&units=metric&lang=ua"
+    r = requests.get(url, timeout=10).json()
+
+    if r.get("cod") != "200":
+        await update.message.reply_text("Помилка отримання прогнозу 😢")
+        return
+
+    days = {}
+    for item in r["list"]:
+        date, time_str = item["dt_txt"].split(" ")
+        temp = item["main"]["temp"]
+        desc = item["weather"][0]["description"]
+        rain = item.get("rain", {}).get("3h", 0)
+
+        if date not in days:
+            days[date] = {"temps": [], "rain": 0, "noon": None, "desc": desc}
+
+        days[date]["temps"].append(temp)
+        days[date]["rain"] += rain
+
+        if time_str.startswith("12"):
+            days[date]["noon"] = temp
+
+    text = "🌤 Прогноз на 3 дні\n\n"
+    for i, (date, info) in enumerate(days.items()):
+        if i == 3:
+            break
+
+        temps = info["temps"]
+        avg = sum(temps) / len(temps)
+
+        text += (
+            f"📅 {date}\n"
+            f"🌡 Мін: {min(temps):.1f}°C\n"
+            f"🌡 Макс: {max(temps):.1f}°C\n"
+            f"🌞 День: {(info['noon'] or avg):.1f}°C\n"
+            f"🌧 Опади: {info['rain']:.1f} мм\n"
+            f"☁ {info['desc']}\n\n"
+        )
+
+    await update.message.reply_text(text)
 
 
-# ===== REGISTER HANDLERS =====
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.Regex("Температура"), temperature))
-application.add_handler(MessageHandler(filters.Regex("Історія"), history_day))
-application.add_handler(MessageHandler(filters.Regex("Погода"), weather_menu))
-application.add_handler(MessageHandler(filters.Regex("^Зараз$"), weather_now))
-application.add_handler(MessageHandler(filters.Regex("Назад"), start))
-
-
-# ===== MAIN =====
-if __name__ == "__main__":
+# ===== RUN =====
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
-    # 👉 запускаємо webhook
-    application.initialize()
-    application.bot.set_webhook(f"https://tbot-home.onrender.com/{BOT_TOKEN}")
 
-    # 👉 фонові задачі
-    import threading
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=keep_alive, daemon=True).start()
     threading.Thread(target=midnight_cleaner, daemon=True).start()
 
-    print("✅ SERVER STARTED")
+    application = Application.builder().token(BOT_TOKEN).build()
 
-    app.run(host="0.0.0.0", port=port)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.Regex("Температура"), temperature))
+    application.add_handler(MessageHandler(filters.Regex("Історія"), history_day))
+    application.add_handler(MessageHandler(filters.Regex("Погода в Запоріжжі"), weather_menu))
+    application.add_handler(MessageHandler(filters.Regex("^Зараз$"), weather_now))
+    application.add_handler(MessageHandler(filters.Regex("^3 дні$"), weather_3days))
+    application.add_handler(MessageHandler(filters.Regex("Назад"), start))
+
+    print("✅ Bot started (polling)")
+
+    application.run_polling(drop_pending_updates=True)
+
